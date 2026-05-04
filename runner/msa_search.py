@@ -13,13 +13,60 @@
 # limitations under the License.
 import json
 import os
+import shutil
 import uuid
+from pathlib import Path
 from typing import Any, Sequence, Tuple
 
 from protenix.utils.logger import get_logger
 from protenix.web_service.colab_request_parser import RequestParser
 
 logger = get_logger(__name__)
+
+
+def resolve_msa_paths(precomputed_msa_dir: str, mode: str) -> tuple[str | None, str | None]:
+    """Return canonical pairing/non-pairing MSA paths for a searched sequence.
+
+    In `colabfold` mode the unpaired and paired outputs can land in different
+    directories. Normalize them back into the per-sequence directory so the rest
+    of the inference pipeline sees the same layout as the native Protenix mode.
+    """
+
+    msa_dir = Path(precomputed_msa_dir)
+    pairing_path = msa_dir / "pairing.a3m"
+    non_pairing_path = msa_dir / "non_pairing.a3m"
+
+    if mode == "colabfold":
+        pairing_candidates = [
+            pairing_path,
+            msa_dir.parent / "pairing.a3m",
+        ]
+        if len(msa_dir.parents) >= 2:
+            pairing_candidates.append(
+                msa_dir.parents[1] / "complex" / msa_dir.name / "pairing.a3m"
+            )
+
+        non_pairing_candidates = [
+            non_pairing_path,
+            msa_dir.parent / "non_pairing.a3m",
+            msa_dir / msa_dir.name / "non_pairing.a3m",
+        ]
+
+        source_pairing = next((path for path in pairing_candidates if path.exists()), None)
+        source_non_pairing = next(
+            (path for path in non_pairing_candidates if path.exists()), None
+        )
+
+        if source_pairing is not None and source_pairing != pairing_path:
+            shutil.copyfile(source_pairing, pairing_path)
+        if source_non_pairing is not None and source_non_pairing != non_pairing_path:
+            shutil.copyfile(source_non_pairing, non_pairing_path)
+
+    resolved_pairing = pairing_path.as_posix() if pairing_path.exists() else None
+    resolved_non_pairing = (
+        non_pairing_path.as_posix() if non_pairing_path.exists() else None
+    )
+    return resolved_pairing, resolved_non_pairing
 
 
 def need_msa_search(json_data: dict) -> bool:
@@ -179,14 +226,14 @@ def update_seq_msa(infer_seq: dict, msa_res_dir: str, mode: str) -> dict:
                 precomputed_msa_dir = protein_msa_res[
                     sequence["proteinChain"]["sequence"]
                 ]
-                if os.path.exists(f"{precomputed_msa_dir}/pairing.a3m"):
-                    sequence["proteinChain"][
-                        "pairedMsaPath"
-                    ] = f"{precomputed_msa_dir}/pairing.a3m"
-                if os.path.exists(f"{precomputed_msa_dir}/non_pairing.a3m"):
-                    sequence["proteinChain"][
-                        "unpairedMsaPath"
-                    ] = f"{precomputed_msa_dir}/non_pairing.a3m"
+                pairing_path, non_pairing_path = resolve_msa_paths(
+                    precomputed_msa_dir,
+                    mode,
+                )
+                if pairing_path is not None:
+                    sequence["proteinChain"]["pairedMsaPath"] = pairing_path
+                if non_pairing_path is not None:
+                    sequence["proteinChain"]["unpairedMsaPath"] = non_pairing_path
 
     return infer_seq
 

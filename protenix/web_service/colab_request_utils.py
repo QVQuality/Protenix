@@ -191,6 +191,62 @@ def run_mmseqs2_service(
         elif pairing_strategy == "complete":
             mode = "paircomplete"
 
+    def finalize_colabfold_result() -> str | None:
+        if not use_pairing:
+            env_a3m_fpath = os.path.join(
+                prefix, "bfd.mgnify30.metaeuk30.smag30.a3m"
+            )
+            with open(env_a3m_fpath, "r") as f:
+                env_a3m_dict = parse_fasta_string(f.read().replace("\x00", ""))
+            uniref_a3m_fpath = os.path.join(prefix, "uniref.a3m")
+            with open(uniref_a3m_fpath, "r") as f:
+                uniref_a3m_dict = parse_fasta_string(f.read().replace("\x00", ""))
+            query_id = str(int(x.split("\n")[0].split("_")[-1]))
+            query_seq = x.split("\n")[1]
+            real_non_pairing_fpath = os.path.join(
+                prefix,
+                query_id,
+                "non_pairing.a3m",
+            )
+            output_dir = os.path.dirname(real_non_pairing_fpath)
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            with open(real_non_pairing_fpath, "w") as f:
+                f.write(f">query\n{query_seq}\n")
+                for k, v in env_a3m_dict.items():
+                    if k.startswith("query_"):
+                        continue
+                    f.write(f">{k}\n{v}\n")
+                for k, v in uniref_a3m_dict.items():
+                    if k.startswith("query_"):
+                        continue
+                    f.write(f">{k}\n{v}\n")
+            return os.path.abspath(os.path.dirname(real_non_pairing_fpath))
+
+        pair_a3m = os.path.join(prefix, "pair.a3m")
+        with open(pair_a3m, "r") as f:
+            pair_a3m_chunks = f.read().split("\x00")
+        for chunk in pair_a3m_chunks[:-1]:
+            real_pairing_fpath = os.path.join(
+                prefix,
+                str(int(chunk.split("\n")[0].split("_")[-1])),
+                "pairing.a3m",
+            )
+            output_dir = os.path.dirname(real_pairing_fpath)
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            chunk_fasta = parse_fasta_string(chunk)
+            with open(real_pairing_fpath, "w") as f:
+                for i, (k, v) in enumerate(chunk_fasta.items()):
+                    if k.startswith("query_"):
+                        f.write(f">query\n{v}\n")
+                    else:
+                        ks = k.split("\t")
+                        ks[0] = f"{ks[0]}_{i}/"
+                        k = "\t".join(ks)
+                        f.write(f">{k}_{i}\n{v}\n")
+        return None
+
     # define path
     path = prefix
     if not os.path.isdir(path):
@@ -274,63 +330,7 @@ def run_mmseqs2_service(
                 else:
                     print("Files downloaded and extracted successfully.")
             elif server_mode == "colabfold":
-                if not use_pairing:
-                    env_a3m_fpath = os.path.join(
-                        prefix, "bfd.mgnify30.metaeuk30.smag30.a3m"
-                    )
-                    with open(env_a3m_fpath, "r") as f:
-                        env_a3m_dict = parse_fasta_string(
-                            f.read().replace("\x00", "")
-                        )
-                    uniref_a3m_fpath = os.path.join(prefix, "uniref.a3m")
-                    with open(uniref_a3m_fpath, "r") as f:
-                        uniref_a3m_dict = parse_fasta_string(
-                            f.read().replace("\x00", "")
-                        )
-                    query_id = str(int(x.split("\n")[0].split("_")[-1]))
-                    query_seq = x.split("\n")[1]
-                    real_non_pairing_fpath = os.path.join(
-                        prefix,
-                        query_id,
-                        "non_pairing.a3m",
-                    )
-                    output_dir = os.path.dirname(real_non_pairing_fpath)
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
-                    with open(real_non_pairing_fpath, "w") as f:
-                        f.write(f">query\n{query_seq}\n")
-                        for k, v in env_a3m_dict.items():
-                            if k.startswith("query_"):
-                                continue
-                            else:
-                                f.write(f">{k}\n{v}\n")
-                        for k, v in uniref_a3m_dict.items():
-                            if k.startswith("query_"):
-                                continue
-                            else:
-                                f.write(f">{k}\n{v}\n")
-                    return os.path.abspath(os.path.dirname(real_non_pairing_fpath))
-                else:
-                    # pairing mode
-                    pair_a3m = os.path.join(prefix, "pair.a3m")
-                    with open(pair_a3m, "r") as f:
-                        pair_a3m_chunks = f.read().split("\x00")
-                    for chunk in pair_a3m_chunks[:-1]:
-                        real_pairing_fpath = os.path.join(
-                            prefix,
-                            str(int(chunk.split("\n")[0].split("_")[-1])),
-                            "pairing.a3m",
-                        )
-                        output_dir = os.path.dirname(real_pairing_fpath)
-                        if not os.path.exists(output_dir):
-                            os.makedirs(output_dir)
-                        chunk_fasta = parse_fasta_string(chunk)
-                        with open(real_pairing_fpath, "w") as f:
-                            for i, (k, v) in enumerate(chunk_fasta.items()):
-                                if k.startswith("query_"):
-                                    f.write(f">query\n{v}\n")
-                                else:
-                                    ks = k.split("\t")
-                                    ks[0] = f"{ks[0]}_{i}/"
-                                    k = "\t".join(ks)
-                                    f.write(f">{k}_{i}\n{v}\n")
+                return finalize_colabfold_result()
+
+    if server_mode == "colabfold" and os.path.isfile(tar_gz_file):
+        return finalize_colabfold_result()

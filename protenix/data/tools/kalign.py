@@ -24,6 +24,73 @@ from protenix.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _get_cpu_flags() -> set[str]:
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.lower().startswith("flags"):
+                    _, _, value = line.partition(":")
+                    return set(value.strip().split())
+    except OSError:
+        pass
+    return set()
+
+
+def _resolve_kalign_binary(binary_path: str) -> str:
+    candidate_paths = []
+    if binary_path:
+        candidate_paths.append(binary_path)
+
+    try:
+        result = subprocess.run(["which", "kalign"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            candidate_paths.append(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    seen_paths = set()
+    cpu_flags = _get_cpu_flags()
+    simd_suffixes = [
+        ("avx2", "kalign-avx2"),
+        ("avx", "kalign-avx"),
+        ("sse4_1", "kalign-sse4.1"),
+        ("ssse3", "kalign-ssse3"),
+        ("sse3", "kalign-sse3"),
+        ("sse2", "kalign-sse2"),
+        ("sse", "kalign-sse"),
+        ("mmx", "kalign-mmx"),
+    ]
+
+    for candidate_path in candidate_paths:
+        if not candidate_path or candidate_path in seen_paths:
+            continue
+        seen_paths.add(candidate_path)
+
+        if not (os.path.exists(candidate_path) and os.access(candidate_path, os.X_OK)):
+            continue
+
+        real_path = os.path.realpath(candidate_path)
+        if os.path.basename(real_path) == "simd-dispatch":
+            base_dir = os.path.dirname(real_path)
+            for flag, binary_name in simd_suffixes:
+                resolved_path = os.path.join(base_dir, binary_name)
+                if flag in cpu_flags and os.path.exists(resolved_path) and os.access(
+                    resolved_path, os.X_OK
+                ):
+                    return resolved_path
+
+        return real_path
+
+    raise RuntimeError(
+        f"Kalign binary not found. Neither kalign in system PATH nor provided path ({binary_path}) exist and are executable.\n"
+        f"To install kalign, you can use one of the following methods:\n"
+        f"1. Using conda: conda install -c bioconda kalign\n"
+        f"2. Using apt (Ubuntu/Debian): apt-get install kalign\n"
+        f"3. Download from: https://github.com/TimoLassmann/kalign\n"
+        f"After installation, make sure the binary is accessible either in PATH or at the specified location."
+    )
+
+
 class Kalign:
     """
     Python wrapper of the Kalign binary.
@@ -37,38 +104,7 @@ class Kalign:
     """
 
     def __init__(self, *, binary_path: str):
-        # First check if kalign is available in the system PATH using 'which'
-        found_path = None
-        try:
-            result = subprocess.run(["which", "kalign"], capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                kalign_in_path = result.stdout.strip()
-                if os.path.exists(kalign_in_path) and os.access(
-                    kalign_in_path, os.X_OK
-                ):
-                    found_path = kalign_in_path
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # 'which' command not found or failed, continue to check other options
-            pass
-
-        # If not found in PATH, check the passed binary_path
-        if found_path is None:
-            if os.path.exists(binary_path) and os.access(binary_path, os.X_OK):
-                found_path = binary_path
-            else:
-                # Generate error message with installation instructions
-                raise RuntimeError(
-                    f"Kalign binary not found. Neither kalign in system PATH "
-                    f"nor provided path ({binary_path}) exist and are executable.\n"
-                    f"To install kalign, you can use one of the following methods:\n"
-                    f"1. Using conda: conda install -c bioconda kalign\n"
-                    f"2. Using apt (Ubuntu/Debian): apt-get install kalign\n"
-                    f"3. Download from: https://github.com/TimoLassmann/kalign\n"
-                    f"After installation, make sure the binary is accessible either in PATH or at the specified location."
-                )
-
-        # Set the found path as the binary path to use
-        self.binary_path = found_path
+        self.binary_path = _resolve_kalign_binary(binary_path)
 
     def align(self, sequences: Sequence[str]) -> Sequence[str]:
         """Aligns the sequences and returns the alignment in A3M string.
@@ -122,7 +158,10 @@ class Kalign:
 
             popen_st = time.perf_counter()
             process = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
 
             with nullcontext():
