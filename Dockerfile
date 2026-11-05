@@ -1,4 +1,6 @@
-FROM pytorch/pytorch:2.7.0-cuda12.6-cudnn9-devel
+# CUDA 12.8 for Blackwell (sm_120). The base's torch 2.7.1+cu128 satisfies requirements.txt's
+# torch pins, so uv keeps it instead of pulling PyPI's cu126 build.
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
